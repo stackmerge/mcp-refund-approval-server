@@ -1,0 +1,19 @@
+http:
+  host: "0.0.0.0"
+  port: "8081"
+
+mcp:
+  serverName: "Refund Approval MCP Server"
+  serverVersion: "1.0.0"
+  endpointPath: "/mcp"
+  elicitationTimeoutSeconds: "120"
+
+refundApi:
+  host: "your-refund-api-host.example.com"
+  port: "443"
+  protocol: "HTTPS"
+  basePath: "/api/v1"
+  refundsPath: "/refunds"
+
+policy:
+  approvalThresholdAmount: "50000"
