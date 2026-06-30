@@ -1,0 +1,173 @@
+{
+  "info": {
+    "_postman_id": "mcp-refund-approval-server-v1",
+    "name": "MCP Refund Approval Server",
+    "description": "MuleSoft MCP Refund Approval Server - Complete test collection.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8081", "type": "string" },
+    { "key": "sessionId", "value": "", "type": "string" },
+    { "key": "elicitationId", "value": "elicit-001", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Protocol Handshake",
+      "item": [
+        {
+          "name": "1.1 Initialize Session",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const sid = pm.response.headers.get('mcp-session-id');",
+            "if (sid) { pm.collectionVariables.set('sessionId', sid); }",
+            "pm.test('Status 200', () => pm.response.to.have.status(200));"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json, text/event-stream" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2024-11-05\",\n    \"capabilities\": { \"elicitation\": {} },\n    \"clientInfo\": { \"name\": \"PostmanMCPClient\", \"version\": \"1.0.0\" }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        },
+        {
+          "name": "1.2 Send Initialized Notification",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"notifications/initialized\",\n  \"params\": {}\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Tool Discovery",
+      "item": [
+        {
+          "name": "2.1 List Tools",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"tools/list\",\n  \"params\": {}\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Standard Refund - Auto-Approved",
+      "item": [
+        {
+          "name": "3.1 INR 25000 - Auto-Approve",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"issue_refund\",\n    \"arguments\": {\n      \"orderId\": \"ORD-10482\",\n      \"amount\": 25000,\n      \"currency\": \"INR\",\n      \"reason\": \"Item not delivered to customer address after 7 business days\"\n    }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        },
+        {
+          "name": "3.2 INR 50000 - Boundary (Auto-Approve)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 4,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"issue_refund\",\n    \"arguments\": {\n      \"orderId\": \"ORD-10999\",\n      \"amount\": 50000,\n      \"currency\": \"INR\",\n      \"reason\": \"Product returned in original condition within return window\"\n    }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. High-Value Refund - Elicitation Required",
+      "item": [
+        {
+          "name": "4.1 INR 75000 - Elicitation Triggered",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "text/event-stream" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 10,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"issue_refund\",\n    \"arguments\": {\n      \"orderId\": \"ORD-20891\",\n      \"amount\": 75000,\n      \"currency\": \"INR\",\n      \"reason\": \"Customer received a damaged product and requested full refund\"\n    }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. High-Risk Refund - Amount > 100000",
+      "item": [
+        {
+          "name": "5.1 INR 150000 - HIGH-VALUE REFUND",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "text/event-stream" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 20,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"issue_refund\",\n    \"arguments\": {\n      \"orderId\": \"ORD-55001\",\n      \"amount\": 150000,\n      \"currency\": \"INR\",\n      \"reason\": \"Enterprise customer requesting bulk order cancellation and full refund\"\n    }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Elicitation Responses",
+      "item": [
+        {
+          "name": "6.1 APPROVE - Execute Refund",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{elicitationId}}\",\n  \"result\": {\n    \"action\": \"accept\",\n    \"content\": {\n      \"decision\": \"APPROVE\",\n      \"reviewerReason\": \"Verified with warehouse. Product confirmed damaged in transit.\"\n    }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        },
+        {
+          "name": "6.2 REJECT - Do Not Execute Refund",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{elicitationId}}\",\n  \"result\": {\n    \"action\": \"accept\",\n    \"content\": {\n      \"decision\": \"REJECT\",\n      \"reviewerReason\": \"Duplicate refund request rejected.\"\n    }\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        },
+        {
+          "name": "6.3 DECLINE - Reviewer Dismissed Form",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "mcp-session-id", "value": "{{sessionId}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": \"{{elicitationId}}\",\n  \"result\": {\n    \"action\": \"decline\"\n  }\n}" },
+            "url": { "raw": "{{baseUrl}}/mcp", "host": ["{{baseUrl}}"], "path": ["mcp"] }
+          }
+        }
+      ]
+    }
+  ]
+}
