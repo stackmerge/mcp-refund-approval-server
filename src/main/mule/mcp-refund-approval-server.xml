@@ -23,9 +23,10 @@
 
     <flow name="issue-refund-flow" doc:name="Issue Refund Flow" doc:description="4-stage refund flow: receive tool call, validate, elicit human approval for high-value refunds, execute only on APPROVE">
 
+        <!-- STAGE 1: Receive the tool call -->
         <mcp:tool-listener config-ref="mcpServerConfig" name="issue_refund" doc:name="issue_refund Tool Listener" doc:description="MCP tool listener exposing issue_refund to AI agents">
-            <mcp:description><![CDATA[Issue a refund for a customer order. Validates eligibility, checks duplicates, assesses risk, and requires human approval for amounts over 50,000 units.]]></mcp:description>
-            <mcp:parameters-schema><![CDATA[{"type":"object","properties":{"orderId":{"type":"string","description":"Order ID"},"amount":{"type":"number","minimum":1},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"reason":{"type":"string","minLength":5,"maxLength":500}},"required":["orderId","amount","currency","reason"]}]]></mcp:parameters-schema>
+            <mcp:description><![CDATA[Issue a refund for a customer order. Validates eligibility, checks duplicates, assesses risk, and requires human approval for amounts over 50,000 units. Inputs: orderId (string), amount (number), currency (ISO-4217), reason (string).]]></mcp:description>
+            <mcp:parameters-schema><![CDATA[{"type":"object","properties":{"orderId":{"type":"string","description":"Order ID (e.g. ORD-10482)"},"amount":{"type":"number","description":"Amount in smallest unit (paise for INR)","minimum":1},"currency":{"type":"string","description":"ISO 4217 code e.g. INR","pattern":"^[A-Z]{3}$"},"reason":{"type":"string","description":"Refund reason","minLength":5,"maxLength":500}},"required":["orderId","amount","currency","reason"]}]]></mcp:parameters-schema>
             <mcp:responses>
                 <mcp:text-tool-response-content text="#[vars.refundResult default 'Refund request processed.']"/>
             </mcp:responses>
@@ -34,10 +35,11 @@
             </mcp:on-error-responses>
         </mcp:tool-listener>
 
-        <set-variable variableName="mcpSessionId" value="#[attributes.sessionId]" doc:name="Store Session ID"/>
-        <set-variable variableName="refundRequest" value="#[payload]" doc:name="Store Refund Request"/>
+        <set-variable variableName="mcpSessionId" value="#[attributes.sessionId]" doc:name="Store Session ID" doc:description="Saves MCP session ID before payload transform - required for create-elicitation"/>
+        <set-variable variableName="refundRequest" value="#[payload]" doc:name="Store Refund Request" doc:description="Preserves raw tool call payload for downstream reference"/>
 
-        <ee:transform doc:name="Validate and Compute Approval Flag">
+        <!-- STAGE 2: Validate the request -->
+        <ee:transform doc:name="Validate and Compute Approval Flag" doc:description="Eligibility, duplicate, threshold and fraud checks. requiresApproval = amount>50000 OR riskFlag">
             <ee:message>
                 <ee:set-payload><![CDATA[%dw 2.0
 output application/java
@@ -67,22 +69,25 @@ var policyResult = if (!isEligible) "FAIL_INELIGIBLE"
             </ee:message>
         </ee:transform>
 
-        <logger level="INFO" message="#['[Refund] order=' ++ payload.orderId ++ ' policy=' ++ payload.validation.policyCheckResult ++ ' requiresApproval=' ++ (payload.requiresApproval as String)]" doc:name="Log Validation"/>
+        <logger level="INFO" message="#['[Refund] order=' ++ payload.orderId ++ ' policy=' ++ payload.validation.policyCheckResult ++ ' requiresApproval=' ++ (payload.requiresApproval as String)]" doc:name="Log Validation" doc:description="Logs validation outcome for audit"/>
 
-        <choice doc:name="Policy Check Gate">
+        <choice doc:name="Policy Check Gate" doc:description="Deny immediately on policy failure; otherwise route to approval logic">
             <when expression="#[payload.validation.policyCheckResult != 'PASS']">
-                <set-variable variableName="refundResult" value="#['Refund denied. Policy: ' ++ payload.validation.policyCheckResult ++ '. Order: ' ++ payload.orderId]" doc:name="Set Policy Denial"/>
-                <logger level="WARN" message="#['[Refund] DENIED - ' ++ vars.refundResult]" doc:name="Log Denial"/>
+                <set-variable variableName="refundResult" value="#['Refund denied. Policy: ' ++ payload.validation.policyCheckResult ++ '. Order: ' ++ payload.orderId]" doc:name="Set Policy Denial" doc:description="Records policy denial message as the refund result"/>
+                <logger level="WARN" message="#['[Refund] DENIED - ' ++ vars.refundResult]" doc:name="Log Denial" doc:description="Logs policy denial for compliance monitoring"/>
             </when>
             <otherwise>
-                <set-variable variableName="validatedRefund" value="#[payload]" doc:name="Store Validated Refund"/>
-                <choice doc:name="Requires Human Approval?">
+                <set-variable variableName="validatedRefund" value="#[payload]" doc:name="Store Validated Refund" doc:description="Stores validated refund data for elicitation message and downstream processing"/>
+
+                <choice doc:name="Requires Human Approval?" doc:description="High-value or high-risk refunds (amount>50000 or riskFlag) route through human approval elicitation">
                     <when expression="#[payload.requiresApproval == true]">
+
+                        <!-- STAGE 3: Create elicitation for human approval -->
                         <mcp:create-elicitation config-ref="mcpServerConfig"
                             sessionId="#[vars.mcpSessionId]"
                             message="#['Refund Approval Required | Order: ' ++ vars.validatedRefund.orderId ++ ' | Amount: ' ++ vars.validatedRefund.currency ++ ' ' ++ (vars.validatedRefund.amount as String) ++ ' | Risk: ' ++ vars.validatedRefund.validation.riskLevel ++ ' | Policy: ' ++ vars.validatedRefund.validation.policyCheckResult ++ ' | Reason: ' ++ vars.validatedRefund.reason]"
                             target="elicitationResult"
-                            doc:name="Create Elicitation - Refund Approval">
+                            doc:name="Create Elicitation - Refund Approval" doc:description="Sends approval form to MCP client. Reviewer sees order/amount/risk details and must APPROVE or REJECT with reason. ACCEPT+APPROVE executes refund; all else fails closed.">
                             <mcp:schema-properties>
                                 <mcp:enum-schema-property name="decision" description="Approve or reject this refund" required="true">
                                     <mcp:enum-entries>
@@ -94,65 +99,92 @@ var policyResult = if (!isEligible) "FAIL_INELIGIBLE"
                             </mcp:schema-properties>
                         </mcp:create-elicitation>
 
-                        <logger level="INFO" message="#['[Elicitation] action=' ++ vars.elicitationResult.action]" doc:name="Log Elicitation Response"/>
+                        <logger level="INFO" message="#['[Elicitation] action=' ++ vars.elicitationResult.action ++ (if (vars.elicitationResult.action == 'accept') ' decision=' ++ (vars.elicitationResult.content.decision default 'null') else '')]" doc:name="Log Elicitation Response" doc:description="Logs elicitation action and decision for audit trail"/>
 
-                        <choice doc:name="Process Elicitation Response">
-                            <when expression="#[vars.elicitationResult.action == 'ACCEPT' and vars.elicitationResult.content.decision == 'APPROVE']">
-                                <http:request config-ref="Refund_API_Config" method="POST" path="${refundApi.refundsPath}" doc:name="Execute Refund API">
+                        <!-- STAGE 4: Process response — ACCEPT!=APPROVE, fails closed -->
+                        <choice doc:name="Process Elicitation Response" doc:description="CRITICAL: ACCEPT+APPROVE=execute. ACCEPT+REJECT=record rejection. DECLINE/other=fail closed. CANCEL handled by error handler.">
+                            <when expression="#[vars.elicitationResult.action == 'accept' and vars.elicitationResult.content.decision == 'APPROVE']">
+                                <!-- ACCEPT + APPROVE: execute the refund -->
+                                <http:request config-ref="Refund_API_Config" method="POST" path="${refundApi.refundsPath}" doc:name="Execute Refund API" doc:description="Calls downstream refund API with approved refund details and correlation ID">
                                     <http:body><![CDATA[#[output application/json --- { orderId: vars.validatedRefund.orderId, amount: vars.validatedRefund.amount, currency: vars.validatedRefund.currency, reason: vars.validatedRefund.reason, approvalDecision: vars.elicitationResult.content.decision, reviewerReason: vars.elicitationResult.content.reviewerReason, correlationId: correlationId }]]]></http:body>
                                 </http:request>
-                                <ee:transform doc:name="Format Success Response">
+                                <ee:transform doc:name="Format Success Response" doc:description="Formats successful refund response with approval details">
                                     <ee:message>
                                         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{ status: "SUCCESS", message: "Refund of " ++ vars.validatedRefund.currency ++ " " ++ (vars.validatedRefund.amount as String) ++ " was approved and successfully issued.", orderId: vars.validatedRefund.orderId, refundId: (payload.refundId default correlationId), reviewerReason: vars.elicitationResult.content.reviewerReason, correlationId: correlationId }]]></ee:set-payload>
+{
+	status: "SUCCESS",
+	message: "Refund of " ++ vars.validatedRefund.currency ++ " " ++ (vars.validatedRefund.amount as String) ++ " was approved and successfully issued.",
+	orderId: vars.validatedRefund.orderId,
+	refundId: (payload.refundId default correlationId),
+	reviewerReason: vars.elicitationResult.content.reviewerReason,
+	correlationId: correlationId
+}]]></ee:set-payload>
                                     </ee:message>
                                 </ee:transform>
-                                <set-variable variableName="refundResult" value="#[write(payload, 'application/json')]" doc:name="Set Success Result"/>
-                                <logger level="INFO" message="#['[Refund] APPROVED and EXECUTED - order=' ++ vars.validatedRefund.orderId]" doc:name="Log Approval Execution"/>
+                                <set-variable variableName="refundResult" value="#[write(payload, 'application/json')]" doc:name="Set Success Result" doc:description="Stores JSON success response as refundResult for the MCP tool response"/>
+                                <logger level="INFO" message="#['[Refund] APPROVED and EXECUTED - order=' ++ vars.validatedRefund.orderId ++ ' by reviewer: ' ++ (vars.elicitationResult.content.reviewerReason default '')]" doc:name="Log Approval Execution" doc:description="Logs successful refund execution with reviewer information"/>
                             </when>
-                            <when expression="#[vars.elicitationResult.action == 'ACCEPT' and vars.elicitationResult.content.decision == 'REJECT']">
-                                <set-variable variableName="refundResult" value="#['Refund rejected by reviewer. Order: ' ++ vars.validatedRefund.orderId ++ '. Reviewer reason: ' ++ (vars.elicitationResult.content.reviewerReason default 'No reason provided')]" doc:name="Set Rejection Result"/>
-                                <logger level="WARN" message="#['[Refund] REJECTED by reviewer - ' ++ vars.refundResult]" doc:name="Log Reviewer Rejection"/>
+                            <when expression="#[vars.elicitationResult.action == 'accept' and vars.elicitationResult.content.decision == 'REJECT']">
+                                <!-- ACCEPT + REJECT: record rejection, do NOT execute -->
+                                <set-variable variableName="refundResult" value="#['Refund rejected by reviewer. Order: ' ++ vars.validatedRefund.orderId ++ '. Reviewer reason: ' ++ (vars.elicitationResult.content.reviewerReason default 'No reason provided')]" doc:name="Set Rejection Result" doc:description="Records reviewer rejection - refund is NOT executed"/>
+                                <logger level="WARN" message="#['[Refund] REJECTED by reviewer - ' ++ vars.refundResult]" doc:name="Log Reviewer Rejection" doc:description="Logs reviewer rejection for audit and compliance"/>
                             </when>
                             <otherwise>
-                                <set-variable variableName="refundResult" value="#['Refund not executed. Reviewer action: ' ++ vars.elicitationResult.action ++ '. Order: ' ++ vars.validatedRefund.orderId ++ '. No refund was processed.']" doc:name="Set Decline Result"/>
-                                <logger level="WARN" message="#['[Refund] DECLINED/UNEXPECTED - action=' ++ vars.elicitationResult.action]" doc:name="Log Decline"/>
+                                <!-- DECLINE or any unexpected action: fail closed, do NOT execute -->
+                                <set-variable variableName="refundResult" value="#['Refund not executed. Reviewer action: ' ++ vars.elicitationResult.action ++ '. Order: ' ++ vars.validatedRefund.orderId ++ '. No refund was processed.']" doc:name="Set Decline Result" doc:description="Fails closed on DECLINE or unexpected action - refund is NOT executed"/>
+                                <logger level="WARN" message="#['[Refund] DECLINED/UNEXPECTED - action=' ++ vars.elicitationResult.action ++ ' order=' ++ vars.validatedRefund.orderId]" doc:name="Log Decline" doc:description="Logs DECLINE or unexpected elicitation action"/>
                             </otherwise>
                         </choice>
                     </when>
                     <otherwise>
-                        <http:request config-ref="Refund_API_Config" method="POST" path="${refundApi.refundsPath}" doc:name="Execute Direct Refund">
-                            <http:body><![CDATA[#[output application/json --- { orderId: vars.validatedRefund.orderId, amount: vars.validatedRefund.amount, currency: vars.validatedRefund.currency, reason: vars.validatedRefund.reason, approvalDecision: "AUTO_APPROVED", correlationId: correlationId }]]]></http:body>
+                        <!-- Low-value standard refund: direct execution without approval -->
+                        <http:request config-ref="Refund_API_Config" method="POST" path="${refundApi.refundsPath}" doc:name="Execute Direct Refund" doc:description="Executes low-value standard refund directly without human approval">
+                            <http:body><![CDATA[#[output application/json
+---
+{
+	orderId: vars.validatedRefund.orderId,
+	amount: vars.validatedRefund.amount,
+	currency: vars.validatedRefund.currency,
+	reason: vars.validatedRefund.reason,
+	approvalDecision: "AUTO_APPROVED",
+	correlationId: correlationId
+}]]]></http:body>
                         </http:request>
-                        <ee:transform doc:name="Format Direct Refund Response">
+                        <ee:transform doc:name="Format Direct Refund Response" doc:description="Formats auto-approved refund success response">
                             <ee:message>
                                 <ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{ status: "SUCCESS", message: "Refund of " ++ vars.validatedRefund.currency ++ " " ++ (vars.validatedRefund.amount as String) ++ " was auto-approved and successfully issued.", orderId: vars.validatedRefund.orderId, refundId: (payload.refundId default correlationId), correlationId: correlationId }]]></ee:set-payload>
+{
+	status: "SUCCESS",
+	message: "Refund of " ++ vars.validatedRefund.currency ++ " " ++ (vars.validatedRefund.amount as String) ++ " was auto-approved and successfully issued.",
+	orderId: vars.validatedRefund.orderId,
+	refundId: (payload.refundId default correlationId),
+	correlationId: correlationId
+}]]></ee:set-payload>
                             </ee:message>
                         </ee:transform>
-                        <set-variable variableName="refundResult" value="#[write(payload, 'application/json')]" doc:name="Set Direct Refund Result"/>
-                        <logger level="INFO" message="#['[Refund] AUTO-APPROVED - order=' ++ vars.validatedRefund.orderId]" doc:name="Log Auto Approval"/>
+                        <set-variable variableName="refundResult" value="#[write(payload, 'application/json')]" doc:name="Set Direct Refund Result" doc:description="Stores auto-approved refund response as refundResult for MCP tool response"/>
+                        <logger level="INFO" message="#['[Refund] AUTO-APPROVED - order=' ++ vars.validatedRefund.orderId]" doc:name="Log Auto Approval" doc:description="Logs auto-approved direct refund execution"/>
                     </otherwise>
                 </choice>
             </otherwise>
         </choice>
 
-        <error-handler doc:name="Error Handler">
-            <on-error-continue type="MCP:REQUEST_TIMEOUT" doc:name="Handle Elicitation Timeout">
-                <set-variable variableName="refundResult" value="#['Refund approval timed out. Order: ' ++ (vars.validatedRefund.orderId default vars.refundRequest.orderId default 'unknown') ++ '. No refund was processed. Please retry or escalate.']" doc:name="Set Timeout Result"/>
-                <logger level="ERROR" message="#['[Refund] TIMEOUT - elicitation timed out, order=' ++ (vars.validatedRefund.orderId default 'unknown')]" doc:name="Log Timeout"/>
+        <error-handler doc:name="Error Handler" doc:description="Handles elicitation timeout (fail closed), HTTP API errors, and unexpected errors">
+            <on-error-continue type="MCP:REQUEST_TIMEOUT" doc:name="Handle Elicitation Timeout" doc:description="Elicitation timed out waiting for reviewer response - escalate or fail closed, never execute refund">
+                <set-variable variableName="refundResult" value="#['Refund approval timed out. Order: ' ++ (vars.validatedRefund.orderId default vars.refundRequest.orderId default 'unknown') ++ '. No refund was processed. Please retry or escalate.']" doc:name="Set Timeout Result" doc:description="Records timeout outcome - refund is NOT executed"/>
+                <logger level="ERROR" message="#['[Refund] TIMEOUT - elicitation timed out, order=' ++ (vars.validatedRefund.orderId default 'unknown')]" doc:name="Log Timeout" doc:description="Logs elicitation timeout for escalation tracking"/>
             </on-error-continue>
-            <on-error-continue type="HTTP:CONNECTIVITY" doc:name="Handle Refund API Error">
-                <set-variable variableName="refundResult" value="#['Refund API unavailable. Order: ' ++ (vars.validatedRefund.orderId default 'unknown') ++ '. Please retry. Error: ' ++ error.description]" doc:name="Set API Error Result"/>
-                <logger level="ERROR" message="#['[Refund] API_ERROR - ' ++ error.description]" doc:name="Log API Error"/>
+            <on-error-continue type="HTTP:CONNECTIVITY" doc:name="Handle Refund API Error" doc:description="Downstream refund API connectivity failure">
+                <set-variable variableName="refundResult" value="#['Refund API unavailable. Order: ' ++ (vars.validatedRefund.orderId default 'unknown') ++ '. Please retry. Error: ' ++ error.description]" doc:name="Set API Error Result" doc:description="Records API connectivity failure"/>
+                <logger level="ERROR" message="#['[Refund] API_ERROR - ' ++ error.description]" doc:name="Log API Error" doc:description="Logs refund API connectivity failure"/>
             </on-error-continue>
-            <on-error-continue type="MULE:ANY" doc:name="Handle Unexpected Errors">
-                <set-variable variableName="refundResult" value="#['Refund operation failed unexpectedly. Order: ' ++ (vars.validatedRefund.orderId default vars.refundRequest.orderId default 'unknown') ++ '. No refund was processed. Error: ' ++ error.description]" doc:name="Set Unexpected Error Result"/>
-                <logger level="ERROR" message="#['[Refund] UNEXPECTED - ' ++ error.errorType.identifier ++ ' ' ++ error.description]" doc:name="Log Unexpected Error"/>
+            <on-error-continue type="MULE:ANY" doc:name="Handle Unexpected Errors" doc:description="Catch-all for unexpected errors including MCP:OPERATION_CANCELLED from CANCEL action">
+                <set-variable variableName="refundResult" value="#['Refund operation failed unexpectedly. Order: ' ++ (vars.validatedRefund.orderId default vars.refundRequest.orderId default 'unknown') ++ '. No refund was processed. Error: ' ++ error.description]" doc:name="Set Unexpected Error Result" doc:description="Records unexpected error outcome - refund is NOT executed"/>
+                <logger level="ERROR" message="#['[Refund] UNEXPECTED - ' ++ error.errorType.identifier ++ ' ' ++ error.description]" doc:name="Log Unexpected Error" doc:description="Logs unexpected errors for diagnostics"/>
             </on-error-continue>
         </error-handler>
     </flow>
