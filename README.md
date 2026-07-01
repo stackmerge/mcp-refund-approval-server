@@ -1,73 +1,104 @@
 # MCP Refund Approval Server
 
-A **MuleSoft 4** application that exposes a **Model Context Protocol (MCP)** tool for AI agents to process customer refund requests with **human-in-the-loop approval** for high-value transactions. Built on the MuleSoft MCP Connector using Streamable HTTP transport.
+A **MuleSoft 4** application that exposes a **Model Context Protocol (MCP)** tool for AI agents to process customer refund requests with **human-in-the-loop approval** for high-value transactions.
+
+Built on the MuleSoft MCP Connector using Streamable HTTP transport.
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
-- [Flow Design](#flow-design)
-- [Decision Logic](#decision-logic)
-- [MCP Tool Reference](#mcp-tool-reference)
-- [Elicitation (Human-in-the-Loop)](#elicitation-human-in-the-loop)
-- [Error Handling](#error-handling)
-- [Running the Application](#running-the-application)
-- [API Reference](#api-reference)
-- [Sample Payloads](#sample-payloads)
-- [Response Schemas](#response-schemas)
-- [Deployment](#deployment)
-- [Dependencies](#dependencies)
+* [Overview](#overview)
+
+  * [Key Capabilities](#key-capabilities)
+* [Architecture](#architecture)
+* [Prerequisites](#prerequisites)
+* [Project Structure](#project-structure)
+* [Configuration](#configuration)
+* [Flow Design](#flow-design)
+
+  * [Stage-by-Stage Walkthrough](#stage-by-stage-walkthrough)
+* [Decision Logic](#decision-logic)
+
+  * [Approval Routing Matrix](#approval-routing-matrix)
+* [MCP Tool Reference](#mcp-tool-reference)
+
+  * [Tool: issue_refund](#tool-issue_refund)
+  * [Input Schema](#input-schema)
+  * [Input Parameter Details](#input-parameter-details)
+  * [Tool Responses](#tool-responses)
+* [Elicitation: Human-in-the-Loop](#elicitation-human-in-the-loop)
+
+  * [Elicitation Message Format](#elicitation-message-format)
+  * [Elicitation Form Fields](#elicitation-form-fields)
+  * [Elicitation Actions](#elicitation-actions)
+  * [Elicitation Timeout](#elicitation-timeout)
+* [Running the Application](#running-the-application)
+
+  * [Option 1: Anypoint Studio](#option-1-anypoint-studio)
+  * [Option 2: Maven Command Line](#option-2-maven-command-line)
+  * [Option 3: Deploy Packaged JAR](#option-3-deploy-packaged-jar)
+  * [Verify the Server is Running](#verify-the-server-is-running)
+* [API Reference](#api-reference)
+
+  * [Endpoint](#endpoint)
+  * [Required Headers](#required-headers)
+  * [MCP Protocol Flow](#mcp-protocol-flow)
+* [Sample Payloads](#sample-payloads)
+* [Response Schemas](#response-schemas)
+* [Dependencies](#dependencies)
+* [Use MCP Inspector as MCP Client](#use-mcp-inspector-as-mcp-client)
+* [Extending the Application](#extending-the-application)
+* [Troubleshooting](#troubleshooting)
+* [References](#references)
 
 ---
 
 ## Overview
 
-The **MCP Refund Approval Server** is a Mule application that bridges AI agent systems and human reviewers for refund processing. It exposes a single MCP tool (`issue_refund`) that:
+The **MCP Refund Approval Server** is a Mule application that bridges AI agent systems and human reviewers for refund processing.
 
-1. **Validates** refund eligibility and checks for duplicates.
-2. **Assesses risk** based on transaction amount and flags.
-3. **Auto-approves** standard low-value refunds (≤ 50,000 units) and immediately calls the downstream Refund API.
-4. **Pauses for human approval** on high-value (> 50,000 units) or high-risk refunds, sending an elicitation form to the MCP client.
-5. **Executes or rejects** based on the human reviewer's decision.
-6. **Fails closed** — if approval times out, reviewer declines, or an unexpected error occurs, no refund is processed.
+It exposes a single MCP tool named `issue_refund` that:
+
+1. **Validates** refund eligibility and checks for duplicate refunds.
+2. **Assesses risk** based on transaction amount and risk flags.
+3. **Auto-approves** standard low-value refunds of `≤ 50,000` units.
+4. **Pauses for human approval** for high-value or high-risk refunds.
+5. **Executes or rejects** the refund based on the reviewer decision.
+6. **Fails closed** if approval times out, the reviewer declines, or an unexpected error occurs.
 
 ### Key Capabilities
 
-| Feature | Detail |
-|---|---|
-| **Protocol** | Model Context Protocol (MCP) over Streamable HTTP |
-| **Transport** | HTTP POST + Server-Sent Events (SSE) |
-| **Human-in-the-loop** | MCP Elicitation for high-value refunds |
-| **Approval Threshold** | 50,000 units (configurable) |
-| **Risk Detection** | Automatic flag for amounts > 100,000 |
-| **Timeout** | 120 seconds elicitation window |
-| **Fail-safe** | Fails closed — no refund without explicit APPROVE |
+| Feature                | Detail                                                      |
+| ---------------------- | ----------------------------------------------------------- |
+| **Protocol**           | Model Context Protocol (MCP) over Streamable HTTP           |
+| **Transport**          | HTTP POST and Server-Sent Events (SSE)                      |
+| **Human-in-the-loop**  | MCP Elicitation for high-value refunds                      |
+| **Approval Threshold** | `50,000` units, configurable                                |
+| **Risk Detection**     | Automatic high-risk flag for amounts greater than `100,000` |
+| **Timeout**            | `120` seconds elicitation window                            |
+| **Fail-safe**          | No refund is issued without explicit approval               |
 
 ---
 
 ## Architecture
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────┐
 │                    AI Agent / MCP Client                           │
 │           (Claude, Copilot, Custom AI, Postman)                    │
 └───────────────────────────┬────────────────────────────────────────┘
-                            │  MCP Streamable HTTP
-                            │  POST http://localhost:8081/mcp
+                            │ MCP Streamable HTTP
+                            │ POST http://localhost:8081/mcp
                             ▼
 ┌────────────────────────────────────────────────────────────────────┐
 │               MCP Refund Approval Server (Mule 4)                  │
 │                                                                    │
 │  ┌─────────────┐   ┌─────────────┐   ┌────────────────────────┐    │
-│  │  Stage 1    │   │  Stage 2    │   │  Stage 3 (conditional) │    │
+│  │  Stage 1    │   │  Stage 2    │   │  Stage 3 (Conditional) │    │
 │  │  MCP Tool   │──▶│  Validate & │──▶│  Human Approval        │    │
 │  │  Listener   │   │  Risk Check │   │  Elicitation           │    │
-│  │ issue_refund│   │             │   │  (amount > 50,000)     │    │
+│  │ issue_refund│   │             │   │  (Amount > 50,000)     │    │
 │  └─────────────┘   └─────────────┘   └────────────────────────┘    │
 │                                                 │                  │
 │                    ┌─────────────┐              │                  │
@@ -76,7 +107,7 @@ The **MCP Refund Approval Server** is a Mule application that bridges AI agent s
 │                    │  Deny Refund│                                 │
 │                    └──────┬──────┘                                 │
 └───────────────────────────┼────────────────────────────────────────┘
-                            │  HTTPS POST /api/v1/refunds
+                            │ HTTPS POST /api/v1/refunds
                             ▼
 ┌────────────────────────────────────────────────────────────────────┐
 │                    Downstream Refund API                           │
@@ -88,30 +119,30 @@ The **MCP Refund Approval Server** is a Mule application that bridges AI agent s
 
 ## Prerequisites
 
-| Requirement | Version |
-|---|---|
-| **Mule Runtime** | 4.11.0 or higher (4.11.2 recommended) |
-| **Java JDK** | 17 |
-| **Maven** | 3.8+ |
-| **Anypoint Studio** | 7.x (optional, for IDE development) |
-| **MuleSoft MCP Connector** | 1.6.0 |
-| **MuleSoft HTTP Connector** | 1.11.3 |
+| Requirement                  | Version                                  |
+| ---------------------------- | ---------------------------------------- |
+| **Mule Runtime**             | 4.11.0 or higher, 4.11.2 recommended     |
+| **Java JDK**                 | 17                                       |
+| **Maven**                    | 3.8 or higher                            |
+| **Anypoint Studio**          | 7.x, optional                            |
+| **MuleSoft MCP Connector**   | 1.6.0                                    |
+| **MuleSoft HTTP Connector**  | 1.11.3                                   |
 | **Anypoint Platform Access** | Required for Maven dependency resolution |
 
 ---
 
 ## Project Structure
 
-```
+```text
 mcp-refund-approval-server/
 ├── src/
 │   └── main/
 │       ├── mule/
 │       │   └── mcp-refund-approval-server.xml    ← Main Mule flow
 │       └── resources/
-│           └── config.yaml                        ← Application configuration
-├── pom.xml                                        ← Maven build descriptor
-├── mule-artifact.json                             ← Mule runtime metadata
+│           └── config.yaml                       ← Application configuration
+├── pom.xml                                       ← Maven build descriptor
+├── mule-artifact.json                            ← Mule runtime metadata
 └── README.md
 ```
 
@@ -119,72 +150,103 @@ mcp-refund-approval-server/
 
 ## Configuration
 
-All configuration is externalized in `src/main/resources/config.yaml`:
+All runtime configuration is externalized in:
+
+```text
+src/main/resources/config.yaml
+```
 
 ```yaml
 http:
-  host: "0.0.0.0"          # Bind address (0.0.0.0 = all interfaces)
-  port: "8081"              # HTTP listener port
+  host: "0.0.0.0"
+  port: "8081"
 
 mcp:
   serverName: "Refund Approval MCP Server"
   serverVersion: "1.0.0"
-  endpointPath: "/mcp"                    # MCP endpoint path
-  elicitationTimeoutSeconds: "120"        # Human approval timeout (seconds)
+  endpointPath: "/mcp"
+  elicitationTimeoutSeconds: "120"
 
 refundApi:
-  host: "your-refund-api-host.example.com"  # ← UPDATE BEFORE RUNNING
+  host: "your-refund-api-host.example.com" # Update before running
   port: "443"
   protocol: "HTTPS"
   basePath: "/api/v1"
   refundsPath: "/refunds"
 
 policy:
-  approvalThresholdAmount: "50000"       # Threshold for human approval
+  approvalThresholdAmount: "50000"
 ```
+
+> Update `refundApi.host` with the hostname of your downstream refund API before starting the application.
+
 ---
 
 ## Flow Design
 
-The application contains a single Mule flow: **`issue-refund-flow`**
+The application contains a primary Mule flow:
+
+```text
+issue-refund-flow
+```
 
 ### Stage-by-Stage Walkthrough
 
 #### Stage 1 — Receive Tool Call
-- The `mcp:tool-listener` named `issue_refund` receives calls from MCP clients.
-- The MCP session ID is stored in `vars.mcpSessionId` for later elicitation routing.
-- The raw payload is stored in `vars.refundRequest` for error-handler fallback.
+
+* The `mcp:tool-listener` named `issue_refund` receives calls from MCP clients.
+* The MCP session ID is stored in `vars.mcpSessionId`.
+* The incoming refund payload is stored in `vars.refundRequest`.
+* The stored payload is available for use in error handlers and audit logs.
 
 #### Stage 2 — Validate and Compute Approval Flag
-A DataWeave 2.0 transform computes the following fields:
 
-| Field | Logic |
-|---|---|
-| `eligibilityCheck` | Always `PASS` (stub — connect to eligibility service) |
-| `duplicateCheck` | Always `NONE` (stub — connect to order service) |
-| `amountThreshold` | `EXCEEDED` if `amount > 50000`, else `WITHIN_LIMIT` |
-| `riskLevel` | `HIGH-VALUE REFUND` if `amount > 100000`, else `STANDARD` |
-| `riskFlag` | `true` if `amount > 100000` |
-| `policyCheckResult` | `PASS`, `FAIL_INELIGIBLE`, or `FAIL_DUPLICATE` |
-| `requiresApproval` | `true` if `amount > 50000` OR `riskFlag == true` |
+A DataWeave 2.0 transformation computes the following fields:
 
-#### Stage 3 — Human Approval Elicitation (Conditional)
-Triggered only when `requiresApproval == true`. The `mcp:create-elicitation` component:
-- Sends a form to the MCP client with order details, amount, risk level, and policy result.
-- Presents two fields: `decision` (enum: APPROVE / REJECT) and `reviewerReason` (string).
-- Blocks the flow for up to `elicitationTimeoutSeconds` (120s) waiting for a response.
-- Returns an `elicitationResult` with `action` (ACCEPT, DECLINE, CANCEL) and `content`.
+| Field               | Logic                                                                 |
+| ------------------- | --------------------------------------------------------------------- |
+| `eligibilityCheck`  | Always `PASS` initially; replace with eligibility service integration |
+| `duplicateCheck`    | Always `NONE` initially; replace with order management lookup         |
+| `amountThreshold`   | `EXCEEDED` if `amount > 50000`, otherwise `WITHIN_LIMIT`              |
+| `riskLevel`         | `HIGH-VALUE REFUND` if `amount > 100000`, otherwise `STANDARD`        |
+| `riskFlag`          | `true` if `amount > 100000`                                           |
+| `policyCheckResult` | `PASS`, `FAIL_INELIGIBLE`, or `FAIL_DUPLICATE`                        |
+| `requiresApproval`  | `true` if `amount > 50000` or `riskFlag == true`                      |
 
-#### Stage 4 — Execute or Deny
-| Elicitation Result | Outcome |
-|---|---|
-| `action=ACCEPT` + `decision=APPROVE` | Calls downstream Refund API — refund **executed** |
-| `action=ACCEPT` + `decision=REJECT` | Records rejection — refund **NOT executed** |
-| `action=DECLINE` or other | Fails closed — refund **NOT executed** |
-| Timeout (`MCP:REQUEST_TIMEOUT`) | Fails closed — refund **NOT executed** |
+#### Stage 3 — Human Approval Elicitation
 
-For low-value refunds (no elicitation path):
-- Directly calls the downstream Refund API with `approvalDecision: "AUTO_APPROVED"`.
+This stage is triggered only when:
+
+```text
+requiresApproval == true
+```
+
+The `mcp:create-elicitation` component:
+
+* Sends an approval form to the MCP client.
+* Displays order details, amount, risk level, policy result, and refund reason.
+* Requires a `decision` of `APPROVE` or `REJECT`.
+* Requires a reviewer justification.
+* Waits up to `120` seconds by default.
+* Returns an `elicitationResult` containing the reviewer action and content.
+
+#### Stage 4 — Execute or Deny Refund
+
+| Elicitation Result                     | Outcome                     |
+| -------------------------------------- | --------------------------- |
+| `action=ACCEPT` and `decision=APPROVE` | Calls downstream Refund API |
+| `action=ACCEPT` and `decision=REJECT`  | Refund is rejected          |
+| `action=DECLINE`                       | Refund is not executed      |
+| `action=CANCEL`                        | Refund is not executed      |
+| `MCP:REQUEST_TIMEOUT`                  | Refund is not executed      |
+
+For low-value refunds that do not require approval, the application directly invokes the downstream Refund API with:
+
+```json
+{
+  "approvalDecision": "AUTO_APPROVED"
+}
+```
 
 ---
 
@@ -192,13 +254,13 @@ For low-value refunds (no elicitation path):
 
 ### Approval Routing Matrix
 
-| Amount | Risk Flag | Policy Result | Path | Refund Executed? |
-|---|---|---|---|---|
-| ≤ 50,000 | false | PASS | Auto-approve (direct API call) | ✅ Yes |
-| > 50,000 | false | PASS | Human elicitation required | ✅ Only on APPROVE |
-| > 100,000 | true | PASS | Human elicitation required (HIGH-VALUE) | ✅ Only on APPROVE |
-| any | any | FAIL_INELIGIBLE | Denied immediately | ❌ No |
-| any | any | FAIL_DUPLICATE | Denied immediately | ❌ No |
+| Amount    | Risk Flag | Policy Result     | Path                             | Refund Executed?   |
+| --------- | --------: | ----------------- | -------------------------------- | ------------------ |
+| ≤ 50,000  |   `false` | `PASS`            | Auto-approve and call Refund API | ✅ Yes              |
+| > 50,000  |   `false` | `PASS`            | Human approval required          | ✅ Only on approval |
+| > 100,000 |    `true` | `PASS`            | High-value approval required     | ✅ Only on approval |
+| Any       |       Any | `FAIL_INELIGIBLE` | Denied immediately               | ❌ No               |
+| Any       |       Any | `FAIL_DUPLICATE`  | Denied immediately               | ❌ No               |
 
 ---
 
@@ -206,9 +268,10 @@ For low-value refunds (no elicitation path):
 
 ### Tool: `issue_refund`
 
-**Description**: Issue a refund for a customer order. Validates eligibility, checks duplicates, assesses risk, and requires human approval for amounts over 50,000 units.
+**Description:**
+Issue a refund for a customer order. The tool validates eligibility, checks duplicates, assesses risk, and requires human approval for amounts above `50,000` units.
 
-#### Input Schema
+### Input Schema
 
 ```json
 {
@@ -216,16 +279,16 @@ For low-value refunds (no elicitation path):
   "properties": {
     "orderId": {
       "type": "string",
-      "description": "Order ID (e.g. ORD-10482)"
+      "description": "Order ID, for example ORD-10482"
     },
     "amount": {
       "type": "number",
-      "description": "Amount in smallest unit (paise for INR)",
+      "description": "Amount in smallest unit, such as paise for INR",
       "minimum": 1
     },
     "currency": {
       "type": "string",
-      "description": "ISO 4217 currency code e.g. INR",
+      "description": "ISO 4217 currency code, for example INR",
       "pattern": "^[A-Z]{3}$"
     },
     "reason": {
@@ -235,22 +298,29 @@ For low-value refunds (no elicitation path):
       "maxLength": 500
     }
   },
-  "required": ["orderId", "amount", "currency", "reason"]
+  "required": [
+    "orderId",
+    "amount",
+    "currency",
+    "reason"
+  ]
 }
 ```
 
-#### Input Parameter Details
+### Input Parameter Details
 
-| Parameter | Type | Required | Constraints | Example |
-|---|---|---|---|---|
-| `orderId` | string | ✅ | Any non-empty string | `"ORD-10482"` |
-| `amount` | number | ✅ | Minimum: 1 (smallest unit) | `25000` (₹250.00) |
-| `currency` | string | ✅ | ISO 4217, exactly 3 uppercase letters | `"INR"` |
-| `reason` | string | ✅ | 5–500 characters | `"Item not delivered"` |
+| Parameter  | Type   | Required | Constraints                         | Example                |
+| ---------- | ------ | -------: | ----------------------------------- | ---------------------- |
+| `orderId`  | string |        ✅ | Non-empty string                    | `"ORD-10482"`          |
+| `amount`   | number |        ✅ | Minimum value: `1`                  | `25000`                |
+| `currency` | string |        ✅ | Three uppercase ISO 4217 characters | `"INR"`                |
+| `reason`   | string |        ✅ | Between 5 and 500 characters        | `"Item not delivered"` |
 
-> **Amount Note**: For INR, amounts are in paise. `25000` = ₹250.00. `100000` = ₹1,000.00.
+> **Amount Note:** For INR, the amount is represented in paise. For example, `25000` represents ₹250.00 and `100000` represents ₹1,000.00.
 
-#### Success Response (Auto-Approve — amount ≤ 50,000)
+### Tool Responses
+
+#### Auto-Approved Refund
 
 ```json
 {
@@ -262,7 +332,7 @@ For low-value refunds (no elicitation path):
 }
 ```
 
-#### Success Response (Human-Approved — amount > 50,000)
+#### Human-Approved Refund
 
 ```json
 {
@@ -275,25 +345,25 @@ For low-value refunds (no elicitation path):
 }
 ```
 
-#### Denial Response (Policy Failure)
+#### Policy Denial
 
 ```text
 Refund denied. Policy: FAIL_INELIGIBLE. Order: ORD-99999
 ```
 
-#### Rejection Response (Reviewer Rejected)
+#### Reviewer Rejection
 
 ```text
 Refund rejected by reviewer. Order: ORD-20891. Reviewer reason: Duplicate order detected by reviewer.
 ```
 
-#### Decline Response (Reviewer Declined Form)
+#### Reviewer Decline
 
 ```text
 Refund not executed. Reviewer action: DECLINE. Order: ORD-20891. No refund was processed.
 ```
 
-#### Timeout Response
+#### Approval Timeout
 
 ```text
 Refund approval timed out. Order: ORD-20891. No refund was processed. Please retry or escalate.
@@ -301,56 +371,41 @@ Refund approval timed out. Order: ORD-20891. No refund was processed. Please ret
 
 ---
 
-## Elicitation (Human-in-the-Loop)
+## Elicitation: Human-in-the-Loop
 
-When a refund requires human approval, the server uses **MCP Elicitation** to pause the flow and request a decision from the human reviewer via the MCP client interface.
+When human approval is required, the application uses **MCP Elicitation** to pause the flow and request a decision through the MCP client interface.
 
 ### Elicitation Message Format
 
-The elicitation message shown to the reviewer:
-
-```
-Refund Approval Required | Order: ORD-20891 | Amount: INR 75000 | 
+```text
+Refund Approval Required | Order: ORD-20891 | Amount: INR 75000 |
 Risk: STANDARD | Policy: PASS | Reason: Customer did not receive item
 ```
 
 ### Elicitation Form Fields
 
-| Field | Type | Required | Options |
-|---|---|---|---|
-| `decision` | enum | ✅ | `APPROVE` or `REJECT` |
-| `reviewerReason` | string | ✅ | Free-text explanation |
+| Field            | Type   | Required | Options               |
+| ---------------- | ------ | -------: | --------------------- |
+| `decision`       | enum   |        ✅ | `APPROVE`, `REJECT`   |
+| `reviewerReason` | string |        ✅ | Free-text explanation |
 
 ### Elicitation Actions
 
-The MCP client can respond with one of three actions:
-
-| Action | Description | Refund Outcome |
-|---|---|---|
-| `ACCEPT` | Reviewer submitted the form | Depends on `decision` field |
-| `DECLINE` | Reviewer explicitly dismissed the form | Refund NOT executed (fail closed) |
-| `CANCEL` | Operation cancelled (triggers `MCP:OPERATION_CANCELLED`) | Refund NOT executed (error handler) |
+| Action    | Description                          | Refund Outcome         |
+| --------- | ------------------------------------ | ---------------------- |
+| `ACCEPT`  | Reviewer submits the approval form   | Depends on `decision`  |
+| `DECLINE` | Reviewer dismisses the approval form | Refund is not executed |
+| `CANCEL`  | Operation is cancelled               | Refund is not executed |
 
 ### Elicitation Timeout
 
-If no response is received within `elicitationTimeoutSeconds` (default: 120 seconds), an `MCP:REQUEST_TIMEOUT` error is raised and the flow fails closed — **no refund is issued**.
+When no response is received within `elicitationTimeoutSeconds`, the MCP Connector raises:
 
----
+```text
+MCP:REQUEST_TIMEOUT
+```
 
-## Error Handling
-
-The flow includes a comprehensive error handler covering all failure scenarios:
-
-| Error Type | Trigger | Outcome |
-|---|---|---|
-| `MCP:REQUEST_TIMEOUT` | Elicitation not responded to within 120s | Fail closed, no refund. Message: "Refund approval timed out." |
-| `HTTP:CONNECTIVITY` | Downstream Refund API unreachable | Fail closed, no refund. Message includes error details. |
-| `MULE:ANY` | Any other error, including `MCP:OPERATION_CANCELLED` | Fail closed, no refund. Full error description returned. |
-
-All errors are:
-- Logged at `ERROR` level with the order ID and error description.
-- Returned to the MCP client as a descriptive text message via `mcp:on-error-responses`.
-- **Never** result in a refund being executed.
+The application fails closed and no refund is issued.
 
 ---
 
@@ -359,38 +414,37 @@ All errors are:
 ### Option 1: Anypoint Studio
 
 1. Open Anypoint Studio.
-2. Go to **File → Import → Anypoint Studio → Anypoint Studio project from File System**.
-3. Select the `mcp-refund-approval-server` folder.
+2. Select **File → Import → Anypoint Studio → Anypoint Studio project from File System**.
+3. Select the `mcp-refund-approval-server` project folder.
 4. Update `config.yaml` with your downstream Refund API details.
-5. Right-click the project → **Run As → Mule Application**.
+5. Right-click the project.
+6. Select **Run As → Mule Application**.
 
 ### Option 2: Maven Command Line
 
 ```bash
-# Clone/navigate to project directory
 cd mcp-refund-approval-server
 
-# Build the project
 mvn clean package
 
-# Run locally (requires local Mule runtime)
 mvn mule:run
 ```
 
 ### Option 3: Deploy Packaged JAR
 
 ```bash
-# Build the deployable JAR
 mvn clean package -DskipTests
+```
 
-# The JAR is created at:
-# target/mcp-refund-approval-server-1.0.0-SNAPSHOT-mule-application.jar
+The deployable JAR is created at:
+
+```text
+target/mcp-refund-approval-server-1.0.0-SNAPSHOT-mule-application.jar
 ```
 
 ### Verify the Server is Running
 
 ```bash
-# Check HTTP listener (should return MCP protocol response)
 curl -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -401,12 +455,23 @@ curl -X POST http://localhost:8081/mcp \
     "params": {
       "protocolVersion": "2024-11-05",
       "capabilities": {},
-      "clientInfo": { "name": "TestClient", "version": "1.0" }
+      "clientInfo": {
+        "name": "TestClient",
+        "version": "1.0"
+      }
     }
   }'
 ```
 
-Expected response contains `"result"` with `serverInfo.name: "Refund Approval MCP Server"`.
+The response should include:
+
+```json
+{
+  "serverInfo": {
+    "name": "Refund Approval MCP Server"
+  }
+}
+```
 
 ---
 
@@ -414,38 +479,36 @@ Expected response contains `"result"` with `serverInfo.name: "Refund Approval MC
 
 ### Endpoint
 
-```
+```text
 POST http://localhost:8081/mcp
 ```
 
 ### Required Headers
 
-| Header | Value | Description |
-|---|---|---|
-| `Content-Type` | `application/json` | Request body format |
-| `Accept` | `application/json` or `text/event-stream` | Use SSE for tool calls with elicitation |
-| `mcp-session-id` | `<session-id>` | Required after initialize; returned in response headers |
+| Header           | Value                                     | Description                          |
+| ---------------- | ----------------------------------------- | ------------------------------------ |
+| `Content-Type`   | `application/json`                        | Request body format                  |
+| `Accept`         | `application/json` or `text/event-stream` | Use SSE for elicitation interactions |
+| `mcp-session-id` | Session ID returned after initialization  | Required after `initialize`          |
 
 ### MCP Protocol Flow
 
-The MCP Streamable HTTP transport follows this sequence:
-
-```
+```text
 Client                                        Server
   │                                              │
-  │── POST /mcp  (method: initialize) ──────────▶│
-  │◀── 200 OK  {result: {serverInfo, ...}}  ─────│
+  │── POST /mcp (method: initialize) ───────────▶│
+  │◀── 200 OK {result: {serverInfo, ...}} ───────│
   │              [mcp-session-id header set]      │
   │                                              │
-  │── POST /mcp  (method: tools/list)  ──────────▶│
-  │◀── 200 OK  {result: {tools: [issue_refund]}} ─│
+  │── POST /mcp (method: tools/list) ───────────▶│
+  │◀── 200 OK {result: {tools: [issue_refund]}} ─│
   │                                              │
-  │── POST /mcp  (method: tools/call)  ──────────▶│
+  │── POST /mcp (method: tools/call) ───────────▶│
   │   Accept: text/event-stream                  │
-  │   [For high-value: server sends elicitation] │
+  │                                              │
   │◀── SSE event: elicitation request ───────────│
   │                                              │
-  │── POST /mcp  (elicitations/respond)  ────────▶│
+  │── POST /mcp (elicitations/respond) ─────────▶│
   │◀── SSE event: tool result ───────────────────│
 ```
 
@@ -455,11 +518,13 @@ Client                                        Server
 
 ### 1. Initialize Session
 
-```json
+```http
 POST http://localhost:8081/mcp
 Content-Type: application/json
 Accept: application/json
+```
 
+```json
 {
   "jsonrpc": "2.0",
   "id": 1,
@@ -477,7 +542,8 @@ Accept: application/json
 }
 ```
 
-**Response:**
+**Response**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -500,12 +566,14 @@ Accept: application/json
 
 ### 2. List Available Tools
 
-```json
+```http
 POST http://localhost:8081/mcp
 Content-Type: application/json
 Accept: application/json
 mcp-session-id: {{sessionId}}
+```
 
+```json
 {
   "jsonrpc": "2.0",
   "id": 2,
@@ -514,42 +582,18 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-**Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 2,
-  "result": {
-    "tools": [
-      {
-        "name": "issue_refund",
-        "description": "Issue a refund for a customer order. Validates eligibility, checks duplicates, assesses risk, and requires human approval for amounts over 50,000 units.",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "orderId": { "type": "string", "description": "Order ID (e.g. ORD-10482)" },
-            "amount": { "type": "number", "description": "Amount in smallest unit (paise for INR)", "minimum": 1 },
-            "currency": { "type": "string", "description": "ISO 4217 code e.g. INR", "pattern": "^[A-Z]{3}$" },
-            "reason": { "type": "string", "description": "Refund reason", "minLength": 5, "maxLength": 500 }
-          },
-          "required": ["orderId", "amount", "currency", "reason"]
-        }
-      }
-    ]
-  }
-}
-```
-
 ---
 
-### 3. Standard Refund — Auto-Approved (amount ≤ 50,000)
+### 3. Standard Refund: Auto-Approved
 
-```json
+```http
 POST http://localhost:8081/mcp
 Content-Type: application/json
 Accept: application/json
 mcp-session-id: {{sessionId}}
+```
 
+```json
 {
   "jsonrpc": "2.0",
   "id": 3,
@@ -566,7 +610,8 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-**Response (Success — Auto-Approved):**
+**Response**
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -585,14 +630,16 @@ mcp-session-id: {{sessionId}}
 
 ---
 
-### 4. High-Value Refund — Requires Human Approval (amount > 50,000)
+### 4. High-Value Refund: Requires Human Approval
 
-```json
+```http
 POST http://localhost:8081/mcp
 Content-Type: application/json
 Accept: text/event-stream
 mcp-session-id: {{sessionId}}
+```
 
+```json
 {
   "jsonrpc": "2.0",
   "id": 4,
@@ -609,8 +656,9 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-**SSE Event Response (Elicitation Request):**
-```
+**SSE Elicitation Request**
+
+```text
 event: message
 data: {
   "jsonrpc": "2.0",
@@ -639,14 +687,9 @@ data: {
 
 ---
 
-### 5. Submit Elicitation Response — APPROVE
+### 5. Submit Elicitation Response: Approve
 
 ```json
-POST http://localhost:8081/mcp
-Content-Type: application/json
-Accept: text/event-stream
-mcp-session-id: {{sessionId}}
-
 {
   "jsonrpc": "2.0",
   "id": "elicit-001",
@@ -660,10 +703,10 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-**Final SSE Tool Result:**
-```
-event: message
-data: {
+**Final Tool Result**
+
+```json
+{
   "jsonrpc": "2.0",
   "id": 4,
   "result": {
@@ -680,14 +723,9 @@ data: {
 
 ---
 
-### 6. Submit Elicitation Response — REJECT
+### 6. Submit Elicitation Response: Reject
 
 ```json
-POST http://localhost:8081/mcp
-Content-Type: application/json
-Accept: text/event-stream
-mcp-session-id: {{sessionId}}
-
 {
   "jsonrpc": "2.0",
   "id": "elicit-001",
@@ -701,10 +739,10 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-**Final SSE Tool Result:**
-```
-event: message
-data: {
+**Final Tool Result**
+
+```json
+{
   "jsonrpc": "2.0",
   "id": 4,
   "result": {
@@ -721,14 +759,9 @@ data: {
 
 ---
 
-### 7. Submit Elicitation Response — DECLINE (Reviewer Dismissed Form)
+### 7. Submit Elicitation Response: Decline
 
 ```json
-POST http://localhost:8081/mcp
-Content-Type: application/json
-Accept: text/event-stream
-mcp-session-id: {{sessionId}}
-
 {
   "jsonrpc": "2.0",
   "id": "elicit-001",
@@ -738,10 +771,10 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-**Final SSE Tool Result:**
-```
-event: message
-data: {
+**Final Tool Result**
+
+```json
+{
   "jsonrpc": "2.0",
   "id": 4,
   "result": {
@@ -758,14 +791,9 @@ data: {
 
 ---
 
-### 8. High-Risk Refund — Above Risk Threshold (amount > 100,000)
+### 8. High-Risk Refund: Above Risk Threshold
 
 ```json
-POST http://localhost:8081/mcp
-Content-Type: application/json
-Accept: text/event-stream
-mcp-session-id: {{sessionId}}
-
 {
   "jsonrpc": "2.0",
   "id": 5,
@@ -782,13 +810,13 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-> This triggers the `HIGH-VALUE REFUND` risk level (`riskFlag=true`) and always requires human approval via elicitation, regardless of any other condition.
+> This request is classified as a `HIGH-VALUE REFUND` and always requires human approval.
 
 ---
 
 ## Response Schemas
 
-### Downstream Refund API — Request Body (Auto-Approved)
+### Downstream Refund API Request: Auto-Approved
 
 ```json
 {
@@ -801,7 +829,7 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-### Downstream Refund API — Request Body (Human-Approved)
+### Downstream Refund API Request: Human-Approved
 
 ```json
 {
@@ -815,7 +843,7 @@ mcp-session-id: {{sessionId}}
 }
 ```
 
-### Validation Payload Structure (internal, `vars.validatedRefund`)
+### Internal Validation Payload
 
 ```json
 {
@@ -834,57 +862,48 @@ mcp-session-id: {{sessionId}}
   "requiresApproval": true
 }
 ```
+
 ---
 
 ## Dependencies
 
 ### Runtime Dependencies
 
-| Dependency | Group ID | Artifact ID | Version | Type |
-|---|---|---|---|---|
-| MuleSoft HTTP Connector | `org.mule.connectors` | `mule-http-connector` | `1.11.3` | mule-plugin |
-| MuleSoft MCP Connector | `com.mulesoft.connectors` | `mule-mcp-connector` | `1.6.0` | mule-plugin |
+| Dependency              | Group ID                  | Artifact ID           | Version  | Type          |
+| ----------------------- | ------------------------- | --------------------- | -------- | ------------- |
+| MuleSoft HTTP Connector | `org.mule.connectors`     | `mule-http-connector` | `1.11.3` | `mule-plugin` |
+| MuleSoft MCP Connector  | `com.mulesoft.connectors` | `mule-mcp-connector`  | `1.6.0`  | `mule-plugin` |
 
 ### Build Dependencies
 
-| Dependency | Group ID | Artifact ID | Version |
-|---|---|---|---|
-| Mule Maven Plugin | `org.mule.tools.maven` | `mule-maven-plugin` | `4.7.0` |
+| Dependency         | Group ID                   | Artifact ID          | Version |
+| ------------------ | -------------------------- | -------------------- | ------- |
+| Mule Maven Plugin  | `org.mule.tools.maven`     | `mule-maven-plugin`  | `4.7.0` |
 | Maven Clean Plugin | `org.apache.maven.plugins` | `maven-clean-plugin` | `3.0.0` |
 
 ### Runtime Requirement
 
-| Property | Value |
-|---|---|
-| **Mule Runtime** | 4.11.0+ (tested on 4.11.2) |
-| **Java** | 17 |
-| **Min Mule Version** | `4.11.0` (declared in `mule-artifact.json`) |
-
-### Maven Repositories
-
-| Repository ID | URL |
-|---|---|
-| `anypoint-exchange-v2` | `https://maven.anypoint.mulesoft.com/api/v2/maven` |
-| `mulesoft-releases` | `https://repository.mulesoft.org/releases/` |
+| Property                 | Value                                      |
+| ------------------------ | ------------------------------------------ |
+| **Mule Runtime**         | 4.11.0 or higher                           |
+| **Java**                 | 17                                         |
+| **Minimum Mule Version** | `4.11.0`, declared in `mule-artifact.json` |
 
 ---
-## Fastest Path: Use MCP Inspector First
 
-The current MCP Inspector release includes **elicitation support**. Use its browser UI rather than `--cli`, because the CLI does not support interactive elicitation flows.
+## Use MCP Inspector as MCP Client
+
+The current MCP Inspector release supports **elicitation**. Use the browser UI instead of `--cli`, because interactive elicitation flows require the browser-based interface.
 
 ### 1. Verify Node.js Version
-
-Run:
 
 ```bash
 node -v
 ```
 
-You need **Node.js 22.7.5 or later**.
+Node.js version `22.7.5` or later is required.
 
 ### 2. Start MCP Inspector
-
-Run:
 
 ```bash
 MCP_SERVER_REQUEST_TIMEOUT=180000 \
@@ -902,25 +921,22 @@ http://localhost:6274
 
 ### 4. Configure the Connection
 
-Use these settings:
-
 | Setting    | Value                       |
 | ---------- | --------------------------- |
 | Transport  | `Streamable HTTP`           |
 | Server URL | `http://localhost:8081/mcp` |
-<img width="815" height="637" alt="image" src="https://github.com/user-attachments/assets/9bf7f62e-db65-4da0-ad90-0f1ab616c9e1" />
+
+<img width="815" height="637" alt="MCP Inspector Streamable HTTP configuration" src="https://github.com/user-attachments/assets/9bf7f62e-db65-4da0-ad90-0f1ab616c9e1" />
 
 ### 5. Test the Elicitation Flow
 
 1. Click **Connect**.
 2. Open the **Tools** tab.
 3. Run the `issue_refund` tool.
-4. Enter the refund payload.
-5. The elicitation form should appear.
+4. Enter a high-value refund payload.
+5. The elicitation approval form should appear.
 
 ### MuleSoft Elicitation Schema
-
-For the MuleSoft flow, use these schema properties:
 
 | Property         | Type   | Required Values / Rule |
 | ---------------- | ------ | ---------------------- |
@@ -929,71 +945,104 @@ For the MuleSoft flow, use these schema properties:
 
 ### Verify Elicitation Capability
 
-After connecting, open **History** and inspect the **Initialize** request.
+After connecting, open the **History** tab and inspect the `initialize` request.
 
-It must include an **elicitation capability**. If it does not:
+The request must include an `elicitation` capability.
+
+If it does not:
 
 1. Disconnect from the server.
 2. Connect again.
 
 > MCP capabilities are negotiated only during initialization.
 
+---
 
 ## Extending the Application
 
-### Integrating Real Eligibility Checks
+### Integrate Real Eligibility Checks
 
-Replace the stub variables in the DataWeave transform in **Stage 2**:
+Replace the placeholder logic in the Stage 2 DataWeave transformation:
 
 ```dataweave
-// Replace these stubs with real API calls:
-var isEligible = true          // → call eligibility microservice
-var existingRefund = false     // → query order management system
+var isEligible = true
+var existingRefund = false
 ```
 
-Add HTTP request calls before the transform to fetch live data and pass results into the transform via flow variables.
+Replace these stubs with real API integrations:
 
-### Adding More Currencies
+```dataweave
+var isEligible = true          // Call eligibility microservice
+var existingRefund = false     // Query order management system
+```
 
-The `currency` field accepts any valid ISO 4217 3-letter code (e.g., `USD`, `EUR`, `GBP`, `INR`). No code changes needed — the regex pattern `^[A-Z]{3}$` validates format only.
+Use HTTP Request operations before the transformation to retrieve the actual eligibility and duplicate-refund results.
 
-### Adjusting the Approval Threshold
+### Add More Currencies
 
-Change `amount > 50000` in the DataWeave transform to reference the config property:
+The `currency` field accepts any three-character ISO 4217 currency code, such as:
+
+```text
+USD
+EUR
+GBP
+INR
+```
+
+The current validation pattern checks formatting only:
+
+```text
+^[A-Z]{3}$
+```
+
+### Adjust the Approval Threshold
+
+Use the configured threshold rather than a hard-coded value:
 
 ```dataweave
 var threshold = ${policy.approvalThresholdAmount} as Number
 var requiresApproval: Boolean = (amount > threshold) or riskFlag
 ```
 
-### Adding Audit Logging
+### Add Audit Logging
 
-The application already logs at `INFO`/`WARN`/`ERROR` levels. To integrate with an audit system, add an HTTP request or publish to a queue after each decision point.
+Add an HTTP request, event publication, database write, or message queue publish after each decision point to send audit events to your governance or observability platform.
+
+Recommended audit events include:
+
+* Tool invocation received
+* Validation completed
+* Approval requested
+* Reviewer decision received
+* Refund executed
+* Refund rejected
+* Approval timeout
+* Unexpected error
 
 ---
 
 ## Troubleshooting
 
-| Issue | Likely Cause | Fix |
-|---|---|---|
-| `HTTP:CONNECTIVITY` on startup | `refundApi.host` not reachable | Update `config.yaml` with correct host/port |
-| Elicitation not received in client | `Accept` header missing or wrong | Set `Accept: text/event-stream` for tool calls |
-| Session ID error | `mcp-session-id` header not sent | Copy session ID from `initialize` response header |
-| 120s timeout | Reviewer did not respond in time | Increase `mcp.elicitationTimeoutSeconds` in config.yaml |
-| Maven build fails | Missing Anypoint credentials | Add credentials to `~/.m2/settings.xml` |
-| Port 8081 already in use | Another process on same port | Change `http.port` in config.yaml |
+| Issue                          | Likely Cause                       | Fix                                                       |
+| ------------------------------ | ---------------------------------- | --------------------------------------------------------- |
+| `HTTP:CONNECTIVITY` on startup | `refundApi.host` is unavailable    | Update `config.yaml` with a valid host and port           |
+| Elicitation not received       | Incorrect `Accept` header          | Use `Accept: text/event-stream` for high-value tool calls |
+| Session ID error               | `mcp-session-id` missing           | Copy the session ID returned after initialization         |
+| Timeout after 120 seconds      | Reviewer did not submit a response | Increase `mcp.elicitationTimeoutSeconds`                  |
+| Maven build fails              | Missing Anypoint credentials       | Add credentials to `~/.m2/settings.xml`                   |
+| Port `8081` already in use     | Another process is using the port  | Change `http.port` in `config.yaml`                       |
 
 ---
 
 ## References
 
-- [MuleSoft MCP Connector Documentation](https://docs.mulesoft.com/mcp-connector/latest/)
-- [Model Context Protocol Specification](https://modelcontextprotocol.io/specification)
-- [MuleSoft Anypoint Platform](https://anypoint.mulesoft.com)
-- [DataWeave 2.0 Language Reference](https://docs.mulesoft.com/dataweave/latest/)
-- [Mule 4 Error Handling](https://docs.mulesoft.com/mule-runtime/latest/error-handling)
-- [MuleSoft General Documentation](https://docs.mulesoft.com/general/)
+* [MuleSoft MCP Connector Documentation](https://docs.mulesoft.com/mcp-connector/latest/)
+* [Model Context Protocol Specification](https://modelcontextprotocol.io/specification)
+* [MuleSoft Anypoint Platform](https://anypoint.mulesoft.com)
+* [DataWeave 2.0 Language Reference](https://docs.mulesoft.com/dataweave/latest/)
+* [Mule 4 Error Handling](https://docs.mulesoft.com/mule-runtime/latest/error-handling)
+* [MuleSoft General Documentation](https://docs.mulesoft.com/general/)
 
 ---
 
-*MCP Refund Approval Server v1.0.0 — Built with MuleSoft 4 and MCP Connector 1.6.0*
+*MCP Refund Approval Server v1.0.0 — Built with MuleSoft 4 and MCP Connector 1.6.0.*
