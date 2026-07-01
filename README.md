@@ -908,6 +908,7 @@ Use these settings:
 | ---------- | --------------------------- |
 | Transport  | `Streamable HTTP`           |
 | Server URL | `http://localhost:8081/mcp` |
+<img width="815" height="637" alt="image" src="https://github.com/user-attachments/assets/9bf7f62e-db65-4da0-ad90-0f1ab616c9e1" />
 
 ### 5. Test the Elicitation Flow
 
