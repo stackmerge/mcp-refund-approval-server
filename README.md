@@ -658,9 +658,8 @@ mcp-session-id: {{sessionId}}
 
 **SSE Elicitation Request**
 
-```text
-event: message
-data: {
+```json
+{
   "jsonrpc": "2.0",
   "id": "elicit-001",
   "method": "elicitations/create",
