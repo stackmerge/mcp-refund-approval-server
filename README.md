@@ -98,25 +98,6 @@ The **MCP Refund Approval Server** is a Mule application that bridges AI agent s
 | **MuleSoft HTTP Connector** | 1.11.3 |
 | **Anypoint Platform Access** | Required for Maven dependency resolution |
 
-### Maven Settings
-
-Ensure your `~/.m2/settings.xml` includes credentials for the MuleSoft repositories:
-
-```xml
-<servers>
-  <server>
-    <id>anypoint-exchange-v2</id>
-    <username>YOUR_ANYPOINT_USERNAME</username>
-    <password>YOUR_ANYPOINT_PASSWORD</password>
-  </server>
-  <server>
-    <id>mulesoft-releases</id>
-    <username>YOUR_ANYPOINT_USERNAME</username>
-    <password>YOUR_ANYPOINT_PASSWORD</password>
-  </server>
-</servers>
-```
-
 ---
 
 ## Project Structure
@@ -161,26 +142,6 @@ refundApi:
 policy:
   approvalThresholdAmount: "50000"       # Threshold for human approval
 ```
-
-### Configuration Reference
-
-| Property | Description | Default |
-|---|---|---|
-| `http.host` | HTTP listener bind address | `0.0.0.0` |
-| `http.port` | HTTP listener port | `8081` |
-| `mcp.serverName` | MCP server display name | `Refund Approval MCP Server` |
-| `mcp.serverVersion` | MCP server version string | `1.0.0` |
-| `mcp.endpointPath` | URL path for the MCP endpoint | `/mcp` |
-| `mcp.elicitationTimeoutSeconds` | Seconds to wait for human decision | `120` |
-| `refundApi.host` | Downstream refund API hostname | *(must be set)* |
-| `refundApi.port` | Downstream refund API port | `443` |
-| `refundApi.protocol` | HTTP or HTTPS | `HTTPS` |
-| `refundApi.basePath` | Base path for refund API | `/api/v1` |
-| `refundApi.refundsPath` | Path for refund endpoint | `/refunds` |
-| `policy.approvalThresholdAmount` | Amount above which human approval is required | `50000` |
-
-> **Note**: `policy.approvalThresholdAmount` is stored in config.yaml for reference but the threshold is currently hardcoded in the DataWeave transform (`amount > 50000`). To make it fully dynamic, reference `${policy.approvalThresholdAmount}` inside the transform.
-
 ---
 
 ## Flow Design
@@ -238,15 +199,6 @@ For low-value refunds (no elicitation path):
 | > 100,000 | true | PASS | Human elicitation required (HIGH-VALUE) | ✅ Only on APPROVE |
 | any | any | FAIL_INELIGIBLE | Denied immediately | ❌ No |
 | any | any | FAIL_DUPLICATE | Denied immediately | ❌ No |
-
-### Fail-Closed Principle
-
-This application **always fails closed**. A refund is executed **only** if:
-- Policy check = `PASS`, AND
-- Either `requiresApproval == false` (auto-approve), OR
-- `requiresApproval == true` AND reviewer submits `action=ACCEPT` AND `decision=APPROVE`
-
-Any other outcome — timeout, decline, cancel, REJECT, or error — results in **no refund**.
 
 ---
 
@@ -882,46 +834,6 @@ mcp-session-id: {{sessionId}}
   "requiresApproval": true
 }
 ```
-
----
-
-## Deployment
-
-### Deploy to CloudHub 2.0
-
-1. Log in to [Anypoint Platform](https://anypoint.mulesoft.com).
-2. Navigate to **Runtime Manager → Deploy Application**.
-3. Upload `target/mcp-refund-approval-server-1.0.0-SNAPSHOT-mule-application.jar`.
-4. Set environment properties:
-   - `refundApi.host` = your production refund API hostname
-   - `refundApi.port` = production port
-   - `refundApi.protocol` = `HTTPS`
-5. Set vCores and replicas as needed.
-
-### Deploy to Runtime Fabric (RTF)
-
-```bash
-mvn deploy -DmuleDeploy \
-  -Danypoint.username=YOUR_USERNAME \
-  -Danypoint.password=YOUR_PASSWORD \
-  -Dcloudhub.application.name=mcp-refund-approval-server \
-  -Dcloudhub.environment=Production
-```
-
-### Docker (Local Testing)
-
-```bash
-# Build
-docker build -t mcp-refund-approval-server:1.0.0 .
-
-# Run with overridden config
-docker run -p 8081:8081 \
-  -e REFUND_API_HOST=localhost \
-  -e REFUND_API_PORT=8080 \
-  -e REFUND_API_PROTOCOL=HTTP \
-  mcp-refund-approval-server:1.0.0
-```
-
 ---
 
 ## Dependencies
@@ -956,6 +868,75 @@ docker run -p 8081:8081 \
 | `mulesoft-releases` | `https://repository.mulesoft.org/releases/` |
 
 ---
+## Fastest Path: Use MCP Inspector First
+
+The current MCP Inspector release includes **elicitation support**. Use its browser UI rather than `--cli`, because the CLI does not support interactive elicitation flows.
+
+### 1. Verify Node.js Version
+
+Run:
+
+```bash
+node -v
+```
+
+You need **Node.js 22.7.5 or later**.
+
+### 2. Start MCP Inspector
+
+Run:
+
+```bash
+MCP_SERVER_REQUEST_TIMEOUT=180000 \
+MCP_REQUEST_MAX_TOTAL_TIMEOUT=180000 \
+npx @modelcontextprotocol/inspector@0.22.0
+```
+
+### 3. Open MCP Inspector
+
+Open the following URL in your browser:
+
+```text
+http://localhost:6274
+```
+
+### 4. Configure the Connection
+
+Use these settings:
+
+| Setting    | Value                       |
+| ---------- | --------------------------- |
+| Transport  | `Streamable HTTP`           |
+| Server URL | `http://localhost:8081/mcp` |
+
+### 5. Test the Elicitation Flow
+
+1. Click **Connect**.
+2. Open the **Tools** tab.
+3. Run the `issue_refund` tool.
+4. Enter the refund payload.
+5. The elicitation form should appear.
+
+### MuleSoft Elicitation Schema
+
+For the MuleSoft flow, use these schema properties:
+
+| Property         | Type   | Required Values / Rule |
+| ---------------- | ------ | ---------------------- |
+| `decision`       | Enum   | `APPROVE`, `REJECT`    |
+| `reviewerReason` | String | Required               |
+
+### Verify Elicitation Capability
+
+After connecting, open **History** and inspect the **Initialize** request.
+
+It must include an **elicitation capability**. If it does not:
+
+1. Disconnect from the server.
+2. Connect again.
+
+> MCP capabilities are negotiated only during initialization.
+
 
 ## Extending the Application
 
