@@ -9,13 +9,7 @@ Built on the MuleSoft MCP Connector using Streamable HTTP transport.
 
 Watch the complete walkthrough here:
 
-<a href="https://www.youtube.com/watch?v=Khh0RJ8HleQ" target="_blank" rel="noopener noreferrer">
-  <img 
-    src="https://img.youtube.com/vi/Khh0RJ8HleQ/maxresdefault.jpg" 
-    alt="Watch the YouTube video" 
-    width="720"
-  />
-</a>
+[![Watch the YouTube video](https://img.youtube.com/vi/b84tCxFR3N0/maxresdefault.jpg)](https://www.youtube.com/watch?v=b84tCxFR3N0)
 ---
 
 ## Overview
