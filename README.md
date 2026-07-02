@@ -5,53 +5,17 @@ A **MuleSoft 4** application that exposes a **Model Context Protocol (MCP)** too
 Built on the MuleSoft MCP Connector using Streamable HTTP transport.
 
 ---
+## YouTube Tutorial
 
-## Table of Contents
+Watch the complete walkthrough here:
 
-* [Overview](#overview)
-
-  * [Key Capabilities](#key-capabilities)
-* [Architecture](#architecture)
-* [Prerequisites](#prerequisites)
-* [Project Structure](#project-structure)
-* [Configuration](#configuration)
-* [Flow Design](#flow-design)
-
-  * [Stage-by-Stage Walkthrough](#stage-by-stage-walkthrough)
-* [Decision Logic](#decision-logic)
-
-  * [Approval Routing Matrix](#approval-routing-matrix)
-* [MCP Tool Reference](#mcp-tool-reference)
-
-  * [Tool: issue_refund](#tool-issue_refund)
-  * [Input Schema](#input-schema)
-  * [Input Parameter Details](#input-parameter-details)
-  * [Tool Responses](#tool-responses)
-* [Elicitation: Human-in-the-Loop](#elicitation-human-in-the-loop)
-
-  * [Elicitation Message Format](#elicitation-message-format)
-  * [Elicitation Form Fields](#elicitation-form-fields)
-  * [Elicitation Actions](#elicitation-actions)
-  * [Elicitation Timeout](#elicitation-timeout)
-* [Running the Application](#running-the-application)
-
-  * [Option 1: Anypoint Studio](#option-1-anypoint-studio)
-  * [Option 2: Maven Command Line](#option-2-maven-command-line)
-  * [Option 3: Deploy Packaged JAR](#option-3-deploy-packaged-jar)
-  * [Verify the Server is Running](#verify-the-server-is-running)
-* [API Reference](#api-reference)
-
-  * [Endpoint](#endpoint)
-  * [Required Headers](#required-headers)
-  * [MCP Protocol Flow](#mcp-protocol-flow)
-* [Sample Payloads](#sample-payloads)
-* [Response Schemas](#response-schemas)
-* [Dependencies](#dependencies)
-* [Use MCP Inspector as MCP Client](#use-mcp-inspector-as-mcp-client)
-* [Extending the Application](#extending-the-application)
-* [Troubleshooting](#troubleshooting)
-* [References](#references)
-
+<a href="https://www.youtube.com/watch?v=Khh0RJ8HleQ" target="_blank" rel="noopener noreferrer">
+  <img 
+    src="https://img.youtube.com/vi/Khh0RJ8HleQ/maxresdefault.jpg" 
+    alt="Watch the YouTube video" 
+    width="720"
+  />
+</a>
 ---
 
 ## Overview
