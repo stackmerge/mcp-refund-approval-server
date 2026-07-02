@@ -9,7 +9,7 @@ Built on the MuleSoft MCP Connector using Streamable HTTP transport.
 
 Watch the complete walkthrough here:
 
-[![Watch the YouTube video](https://img.youtube.com/vi/b84tCxFR3N0/maxresdefault.jpg)](https://www.youtube.com/watch?v=b84tCxFR3N0)
+[![Watch the YouTube video](https://img.youtube.com/vi/Khh0RJ8HleQ/maxresdefault.jpg)]([https://www.youtube.com/watch?v=b84tCxFR3N0](https://www.youtube.com/watch?v=Khh0RJ8HleQ))
 ---
 
 ## Overview
